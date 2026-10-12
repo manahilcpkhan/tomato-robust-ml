@@ -1,0 +1,15 @@
+# big / regenerable
+data/raw/
+work/
+*.npy
+*.joblib
+*.zip
+# personal
+config.local.yaml
+.env
+# python / notebooks
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+.DS_Store

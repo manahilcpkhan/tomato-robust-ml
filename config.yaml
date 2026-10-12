@@ -1,0 +1,77 @@
+# Single source of truth for every experiment. Do not hard-code seeds/paths in code.
+# Personal overrides: create config.local.yaml (git-ignored) or set TOMATO_DATA_ROOT /
+# TOMATO_WORK_DIR / TOMATO_RESULTS_DIR environment variables (the Colab/Kaggle runner does this).
+
+seed: 42
+n_jobs: -1            # joblib workers for feature extraction / RF (-1 = all cores)
+
+paths:
+  data_root: data/raw          # folder holding the raw dataset images (git-ignored)
+  work_dir: work               # big files: image cache, features, models (git-ignored)
+  results_dir: results         # small csv/json/png outputs (committed)
+  manifest: data/manifest.csv  # path,label,split,class_id (committed, shared by everyone)
+
+dataset:
+  classes: [early_blight, late_blight, septoria_leaf_spot, leaf_mold, yellow_leaf_curl_virus, healthy]
+  # A folder name is mapped to a class if one of its word-tokens starts with a keyword.
+  class_keywords:
+    early_blight: [early]
+    late_blight: [late]
+    septoria_leaf_spot: [septoria]
+    leaf_mold: [mold, mould, leafmold]
+    yellow_leaf_curl_virus: [yellow, curl, ylcv, tylcv]
+    healthy: [healthy]
+  # Folder names that mark the official split. If none are found, a stratified fallback split is made.
+  split_names:
+    train: [train, training]
+    val: [val, valid, validation]
+    test: [test, testing]
+  fallback_split: {train: 0.7, val: 0.2, test: 0.1}
+  image_extensions: [.jpg, .jpeg, .png]
+
+preprocess:
+  image_size: 256              # every image is resized to image_size x image_size once and cached
+
+segmentation:
+  method: hsv                  # hsv (fast) | grabcut (better, ~10x slower) | none
+  sat_min: 40
+  val_min: 40
+  hue_min: 20                  # OpenCV hue scale 0-179: ~20 = yellow, ~60 = green, soil/brown < 20
+  hue_max: 100
+  close_px: 15                 # closing kernel; larger = fills more enclosed lesions
+  min_leaf_frac: 0.05          # below this the mask is considered failed -> whole image is used
+  grabcut_iters: 3
+
+features:
+  lbp: [[8, 1], [16, 2]]       # (P, R) pairs, uniform LBP
+  glcm_levels: 32
+  glcm_distances: [1, 3]
+  hue_bins: 12
+  sat_bins: 8
+  lesion_exg_thresh: 0.15      # excess-green threshold below which a leaf pixel counts as "non-green"
+  min_lesion_px: 20
+
+models:
+  rf:
+    n_estimators: 300
+    grid: {max_depth: [null, 20, 40], max_features: [sqrt, 0.3], min_samples_leaf: [1, 2]}
+  svm:
+    grid: {C: [1, 10, 100], gamma: [scale, 0.01, 0.001]}
+  lr:
+    grid: {C: [0.01, 0.1, 1, 10]}
+
+perturbations:                 # applied to the TEST set only
+  brightness: [0.5, 0.7, 1.3, 1.6]       # multiplicative factor
+  contrast: [0.5, 0.7, 1.5, 2.0]         # factor around the image mean
+  shadow: [0.3, 0.5, 0.7]                # darkening strength of a soft diagonal shadow
+  background: [gray, noise, soil, grass] # synthetic replacement of the non-leaf region
+
+explain:
+  cv_folds: 5
+  perm_repeats_cv: 5
+  perm_repeats_perturbed: 3
+  topk: [10, 20]
+
+duplicates:
+  hash_size: 16                # dHash of hash_size*hash_size bits
+  hamming_threshold: 10        # bits (out of 256) below which two images count as near-duplicates

@@ -30,6 +30,11 @@ def main():
         df = refine_groups(cfg, df)
     print(f"data_root: {cfg['paths']['data_root']}")
     print(f"{len(df)} images, {df['label'].nunique()} classes: {sorted(df['label'].unique())}")
+    counts = df["label"].value_counts()
+    print("\nimages per class" + (" (after merging near-duplicates: unique photos per class below)" if args.hash else ""))
+    print(pd.DataFrame({"images": counts, "unique_photos": df.groupby("label")["group"].nunique()})
+          .reindex(counts.index).to_string())
+    print(f"imbalance (largest/smallest class): {counts.max() / counts.min():.1f}x")
 
     if df["official_split"].notna().all():
         print("\n--- using the dataset's own train/val/test folders ---")

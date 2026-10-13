@@ -1,0 +1,37 @@
+{
+  "cv_macro_f1_mean": 0.5649473784510708,
+  "cv_macro_f1_std": 0.0297075131305654,
+  "impurity": {
+    "spearman_mean": 0.9052861289653741,
+    "spearman_std": 0.008244369071262971,
+    "kendall_mean": 0.7490842490842491,
+    "kendall_std": 0.013613369666452239,
+    "n_pairs": 10,
+    "jaccard_top10_mean": 0.7447552447552448,
+    "jaccard_top10_std": 0.0965398060134211,
+    "jaccard_top20_mean": 0.7649162431771127,
+    "jaccard_top20_std": 0.07073476071425576
+  },
+  "permutation": {
+    "spearman_mean": 0.8643157785610616,
+    "spearman_std": 0.02221123486711173,
+    "kendall_mean": 0.6945787545787545,
+    "kendall_std": 0.025733376339125313,
+    "n_pairs": 10,
+    "jaccard_top10_mean": 0.7272727272727273,
+    "jaccard_top10_std": 0.0742269619025206,
+    "jaccard_top20_mean": 0.7786561264822134,
+    "jaccard_top20_std": 0.03952569169960479
+  },
+  "group_permutation": {
+    "spearman_mean": 1.0,
+    "spearman_std": 0.0,
+    "kendall_mean": 1.0,
+    "kendall_std": 0.0,
+    "n_pairs": 10,
+    "jaccard_top1_mean": 1.0,
+    "jaccard_top1_std": 0.0,
+    "jaccard_top2_mean": 1.0,
+    "jaccard_top2_std": 0.0
+  }
+}

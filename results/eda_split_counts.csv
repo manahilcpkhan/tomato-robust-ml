@@ -1,0 +1,7 @@
+label,train,val,test
+early_blight,84,18,17
+healthy,96,21,20
+late_blight,80,17,16
+leaf_mold,131,28,27
+septoria_leaf_spot,137,29,29
+yellow_leaf_curl_virus,56,12,12

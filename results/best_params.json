@@ -1,0 +1,14 @@
+{
+  "rf": {
+    "max_depth": null,
+    "max_features": 0.3,
+    "min_samples_leaf": 1
+  },
+  "svm": {
+    "C": 10,
+    "gamma": 0.001
+  },
+  "lr": {
+    "C": 0.1
+  }
+}

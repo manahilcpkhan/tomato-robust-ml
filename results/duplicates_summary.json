@@ -1,0 +1,18 @@
+{
+  "n_test_images_with_source_photo_in_trainval": 0,
+  "frac_test_group_leaky": 0.0,
+  "frac_test_leaky_any": 0.024793388429752067,
+  "n_pairs_total": 55,
+  "n_pairs_cross_split": 6,
+  "n_pairs_label_conflict": 9,
+  "n_test_images_with_duplicate_in_trainval": 3,
+  "frac_test_leaky": 0.024793388429752067,
+  "n_val_images_with_duplicate_in_train": 2,
+  "threshold_bits": 10,
+  "hash_bits": 63,
+  "hamming_histogram": {
+    "0": 52,
+    "2": 2,
+    "4": 1
+  }
+}

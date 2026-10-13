@@ -1,0 +1,9 @@
+{
+  "n_images": 830,
+  "n_pairs": 55,
+  "n_cross_class_pairs": 9,
+  "groups_before": 830,
+  "groups_after": 785,
+  "largest_group": 3,
+  "n_groups_with_copies": 44
+}

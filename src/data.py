@@ -1,6 +1,7 @@
-"""Dataset indexing and the 256x256 image cache.  (Owner: Member A)
+"""Dataset indexing, source-photo grouping, audit and the 256x256 image cache.  (Owner: Member A)
 
-manifest.csv  : path (relative to data_root), label, split, class_id   -> one row per image, fixed order
+manifest.csv  : path (relative to data_root), label, split, class_id, group, is_aug  -> one row per image
+                `group` = the source photo an image was derived from (augmented copies share it).
 images_cache  : uint8 RGB array (N, S, S, 3) in manifest order, memory-mapped by every later stage
 """
 from __future__ import annotations
@@ -8,18 +9,19 @@ from __future__ import annotations
 import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import cv2
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
+from .duplicates import find_near_duplicates
 from .utils import load_json, save_json
 
 SPLITS = ("train", "val", "test")
 
 
-# --------------------------------------------------------------------------- manifest
+# --------------------------------------------------------------------------- scanning
 def _tokens(s: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", s.lower()) if t]
 
@@ -45,7 +47,19 @@ def _match_split(parts, cfg) -> str | None:
     return None
 
 
-def build_manifest(cfg) -> pd.DataFrame:
+def source_group(stem: str, label: str, cfg) -> tuple[str, bool]:
+    """(group id, is_augmented). Group = class + filename text before the augmentation marker."""
+    rx = cfg["dataset"].get("group_regex") or ""
+    if rx:
+        m = re.search(rx, stem, flags=re.IGNORECASE)
+        if m:
+            base = stem[: m.start()].rstrip("_- ") or stem
+            return f"{label}/{base}", True
+    return f"{label}/{stem}", False
+
+
+def scan_images(cfg) -> pd.DataFrame:
+    """Find every labelled image under data_root. Columns: path, label, official_split, group, is_aug."""
     root = cfg["paths"]["data_root"]
     if not root.exists():
         raise FileNotFoundError(
@@ -53,9 +67,13 @@ def build_manifest(cfg) -> pd.DataFrame:
             "Set paths.data_root in config.local.yaml or the TOMATO_DATA_ROOT env variable."
         )
     exts = {e.lower() for e in cfg["dataset"]["image_extensions"]}
-    rows, unmatched = [], {}
+    rows, unmatched, skipped = [], {}, {}
     for p in sorted(root.rglob("*")):
-        if not p.is_file() or p.suffix.lower() not in exts:
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in exts:
+            if p.suffix.lower() not in (".md", ".txt", ".pdf", ".db", ".csv", ".json", ".zip", ""):
+                skipped[p.suffix.lower()] = skipped.get(p.suffix.lower(), 0) + 1
             continue
         rel = p.relative_to(root)
         parts = rel.parts[:-1]
@@ -64,8 +82,9 @@ def build_manifest(cfg) -> pd.DataFrame:
             key = "/".join(parts) if parts else "."
             unmatched[key] = unmatched.get(key, 0) + 1
             continue
-        rows.append({"path": rel.as_posix(), "label": label, "split": _match_split(parts, cfg)})
-
+        group, is_aug = source_group(p.stem, label, cfg)
+        rows.append({"path": rel.as_posix(), "label": label, "official_split": _match_split(parts, cfg),
+                     "group": group, "is_aug": is_aug})
     if not rows:
         raise RuntimeError(
             f"No labelled images found under {root}.\n"
@@ -74,21 +93,148 @@ def build_manifest(cfg) -> pd.DataFrame:
         )
     if unmatched:
         print(f"WARNING: {sum(unmatched.values())} images in folders with no class match: {list(unmatched)[:10]}")
+    if skipped:
+        print(f"WARNING: files with other extensions were ignored: {skipped} "
+              "(add the extension to dataset.image_extensions if they are images)")
+    return pd.DataFrame(rows)
 
-    df = pd.DataFrame(rows)
-    n_missing = int(df["split"].isna().sum())
-    if n_missing == len(df):
-        print("No train/val/test folders detected -> creating a stratified fallback split "
-              f"{cfg['dataset']['fallback_split']} (seed={cfg['seed']}).")
-        fr = cfg["dataset"]["fallback_split"]
-        tr, rest = train_test_split(df.index, test_size=1 - fr["train"], stratify=df["label"], random_state=cfg["seed"])
-        va, te = train_test_split(
-            rest, test_size=fr["test"] / (fr["val"] + fr["test"]),
-            stratify=df.loc[rest, "label"], random_state=cfg["seed"],
-        )
-        df.loc[tr, "split"], df.loc[va, "split"], df.loc[te, "split"] = "train", "val", "test"
-    elif n_missing:
-        raise RuntimeError(f"{n_missing} images have no split folder while others do; check split_names in config.yaml")
+
+# --------------------------------------------------------------------------- visual grouping
+def _load_small(path, size: int = 64) -> np.ndarray:
+    img = _read_rgb(path)
+    if img is None:
+        return np.zeros((size, size, 3), np.uint8)
+    return cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+
+
+def refine_groups(cfg, df: pd.DataFrame) -> pd.DataFrame:
+    """Merge images into one group when they are near-duplicates (dHash, flip-aware) of the same class.
+
+    Catches resized / recompressed / flipped / slightly re-lit copies of one photo, which file names cannot reveal.
+    It does NOT catch a different photo of the same leaf taken from another angle.
+    """
+    root = cfg["paths"]["data_root"]
+    n = len(df)
+    d = cfg["duplicates"]
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    first = {}
+    for i, g in enumerate(df["group"].values):
+        if g in first:
+            union(i, first[g])
+        else:
+            first[g] = i
+
+    print(f"Hashing {n} images to cluster near-duplicates (reads every file once) ...")
+    paths = [root / p for p in df["path"]]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        small = np.stack(list(ex.map(_load_small, paths)))
+    pairs = find_near_duplicates(small, d["hash_size"], d["hamming_threshold"], min_corr=d["min_correlation"])
+    labels = df["label"].values
+    cross = 0
+    for i, j in zip(pairs["i"].values, pairs["j"].values):
+        if labels[i] == labels[j]:
+            union(int(i), int(j))
+        else:
+            cross += 1
+    roots = np.array([find(i) for i in range(n)])
+    new_group = df["group"].values[roots]
+    out = df.copy()
+    before, after = out["group"].nunique(), len(set(new_group))
+    out["group"] = new_group
+    sizes = pd.Series(new_group).value_counts()
+    print(f"near-duplicate pairs: {len(pairs)} ({cross} across different classes = possible label noise). "
+          f"groups {before} -> {after}; largest group: {int(sizes.max())} images")
+    if sizes.max() > max(20, 0.02 * n):
+        print(f"WARNING: one group has {int(sizes.max())} images ({sizes.max() / n:.1%} of the data). Near-duplicate "
+              "matching is probably chaining unrelated leaves: lower duplicates.hamming_threshold or raise "
+              "duplicates.min_correlation in config.yaml, then rebuild.")
+    save_json({"n_images": n, "n_pairs": int(len(pairs)), "n_cross_class_pairs": int(cross),
+               "groups_before": int(before), "groups_after": int(after),
+               "largest_group": int(sizes.max()), "n_groups_with_copies": int((sizes > 1).sum())},
+              cfg["paths"]["results_dir"] / "grouping_summary.json")
+    return out
+
+
+# --------------------------------------------------------------------------- audit
+def audit_dataset(df: pd.DataFrame, split_col: str) -> dict:
+    """Class balance, augmentation share and source-photo leakage between splits."""
+    d = df[df[split_col].notna()]
+    g_splits = d.groupby("group")[split_col].nunique()
+    multi = g_splits[g_splits > 1].index
+    out = {
+        "n_images": int(len(df)),
+        "n_source_groups": int(df["group"].nunique()),
+        "mean_images_per_group": float(len(df) / df["group"].nunique()),
+        "frac_images_marked_augmented": float(df["is_aug"].mean()),
+        "n_groups_spanning_multiple_splits": int(len(multi)),
+        "frac_images_in_cross_split_groups": float(d["group"].isin(multi).mean()),
+        "counts": pd.crosstab(d["label"], d[split_col]).to_dict(),
+    }
+    tr = set(d.loc[d[split_col].isin(["train", "val"]), "group"])
+    te = d[d[split_col] == "test"]
+    if len(te):
+        out["frac_test_images_with_source_in_trainval"] = float(te["group"].isin(tr).mean())
+        out["n_test_groups"] = int(te["group"].nunique())
+    return out
+
+
+# --------------------------------------------------------------------------- splitting
+def group_split(df: pd.DataFrame, fracs: dict, seed: int) -> pd.Series:
+    """Per-class split by whole groups, so no source photo is shared between splits."""
+    rng = np.random.default_rng(seed)
+    split = pd.Series(index=df.index, dtype=object)
+    for label, sub in df.groupby("label"):
+        sizes = sub.groupby("group").size()
+        groups = sizes.index.to_numpy().copy()
+        rng.shuffle(groups)
+        total = float(sizes.sum())
+        t_tr, t_va = fracs["train"] * total, (fracs["train"] + fracs["val"]) * total
+        assign, cum = {}, 0
+        for g in groups:
+            assign[g] = "train" if cum < t_tr else ("val" if cum < t_va else "test")
+            cum += sizes[g]
+        split[sub.index] = sub["group"].map(assign)
+        got = split[sub.index].value_counts()
+        if any(got.get(s, 0) == 0 for s in SPLITS):
+            print(f"WARNING: class {label} has too few source groups for all three splits: {got.to_dict()}")
+    return split
+
+
+def build_manifest(cfg) -> pd.DataFrame:
+    df = scan_images(cfg)
+    if cfg["dataset"].get("group_by_hash"):
+        df = refine_groups(cfg, df)
+    strategy = cfg["dataset"]["split_strategy"]
+    have_official = df["official_split"].notna().all()
+    if strategy == "official":
+        if not have_official:
+            raise RuntimeError(
+                "split_strategy is 'official' but some/all images are not under train/val/test folders. "
+                "Point data_root at the folder that contains train/val/test, or set split_strategy: group."
+            )
+        df["split"] = df["official_split"]
+    elif strategy == "group":
+        df["split"] = group_split(df, cfg["dataset"]["group_split"], cfg["seed"])
+    else:
+        raise ValueError(f"unknown split_strategy: {strategy}")
+
+    audit = audit_dataset(df.assign(split=df["split"]), "split")
+    if audit["n_groups_spanning_multiple_splits"]:
+        print(f"WARNING: {audit['n_groups_spanning_multiple_splits']} source photos appear in more than one split "
+              f"({audit['frac_images_in_cross_split_groups']:.1%} of images). Test scores will be inflated. "
+              "Use dataset.split_strategy: group.")
 
     classes = cfg["dataset"]["classes"]
     absent = set(classes) - set(df["label"])
@@ -97,10 +243,11 @@ def build_manifest(cfg) -> pd.DataFrame:
     df["class_id"] = df["label"].map({c: i for i, c in enumerate(classes)})
     order = {s: i for i, s in enumerate(SPLITS)}
     df = (df.assign(_o=df["split"].map(order)).sort_values(["_o", "class_id", "path"])
-            .drop(columns="_o").reset_index(drop=True))
+            .drop(columns=["_o", "official_split"]).reset_index(drop=True))
+    df = df[["path", "label", "split", "class_id", "group", "is_aug"]]
 
     df.to_csv(cfg["paths"]["manifest"], index=False)
-    print(f"Wrote {cfg['paths']['manifest']}  ({len(df)} images)")
+    print(f"Wrote {cfg['paths']['manifest']}  ({len(df)} images, {df['group'].nunique()} source photos)")
     print(pd.crosstab(df["label"], df["split"])[list(SPLITS)])
     return df
 

@@ -17,7 +17,7 @@ import joblib  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.metrics import f1_score  # noqa: E402
-from sklearn.model_selection import StratifiedKFold  # noqa: E402
+from sklearn.model_selection import StratifiedGroupKFold  # noqa: E402
 
 from src.config import load_config  # noqa: E402
 from src.data import load_manifest, split_indices  # noqa: E402
@@ -48,9 +48,11 @@ def main():
     rng = np.random.default_rng(cfg["seed"])
 
     # ---------------- A) across CV folds
-    skf = StratifiedKFold(ex["cv_folds"], shuffle=True, random_state=cfg["seed"])
+    # folds keep all copies of a source photo together (otherwise augmented siblings leak across folds)
+    gtv = np.concatenate([df["group"].values[idx["train"]], df["group"].values[idx["val"]]])
+    skf = StratifiedGroupKFold(ex["cv_folds"], shuffle=True, random_state=cfg["seed"])
     imp_imp, imp_perm, grp_perm, cv_f1 = [], [], [], []
-    for f, (tr, va) in enumerate(skf.split(Xtv, ytv)):
+    for f, (tr, va) in enumerate(skf.split(Xtv, ytv, groups=gtv)):
         with Timer(f"CV fold {f + 1}/{ex['cv_folds']}"):
             m = make_model("rf", best["rf"], cfg).fit(Xtv[tr], ytv[tr])
             cv_f1.append(f1_score(ytv[va], m.predict(Xtv[va]), average="macro"))

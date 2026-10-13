@@ -126,7 +126,7 @@ def step_segmentation(cfg, df, imgs, res, n_stats=1000, n_show=12):
 def step_duplicates(cfg, df, imgs, res):
     d = cfg["duplicates"]
     with Timer("near-duplicate search"):
-        pairs = find_near_duplicates(imgs, d["hash_size"], d["hamming_threshold"])
+        pairs = find_near_duplicates(imgs, d["hash_size"], d["hamming_threshold"], min_corr=d["min_correlation"])
     if len(pairs):
         for side in ("i", "j"):
             pairs[f"path_{side}"] = df["path"].values[pairs[side]]
@@ -148,16 +148,26 @@ def step_duplicates(cfg, df, imgs, res):
                 val_leaky[r.i] = True
             if sj == "val" and si == "train":
                 val_leaky[r.j] = True
-    flags = pd.DataFrame({"path": df["path"].values[idx["test"]], "leaky": test_leaky[idx["test"]]})
+    # source-photo leakage (from filenames): test image whose source photo also appears in train/val
+    trval_groups = set(df.loc[idx["train"], "group"]) | set(df.loc[idx["val"], "group"])
+    group_leaky = df["group"].isin(trval_groups).values & (df["split"].values == "test")
+    flags = pd.DataFrame({"path": df["path"].values[idx["test"]],
+                          "leaky_hash": test_leaky[idx["test"]],
+                          "leaky_group": group_leaky[idx["test"]]})
+    flags["leaky"] = flags["leaky_hash"] | flags["leaky_group"]
     flags.to_csv(res / "test_leakage_flags.csv", index=False)
 
-    summary = {"n_pairs_total": int(len(pairs)),
+    summary = {"n_test_images_with_source_photo_in_trainval": int(group_leaky.sum()),
+               "frac_test_group_leaky": float(group_leaky[idx["test"]].mean()),
+               "frac_test_leaky_any": float(flags["leaky"].mean()),
+               "n_pairs_total": int(len(pairs)),
                "n_pairs_cross_split": int((pairs.split_i != pairs.split_j).sum()) if len(pairs) else 0,
                "n_pairs_label_conflict": int((pairs.label_i != pairs.label_j).sum()) if len(pairs) else 0,
                "n_test_images_with_duplicate_in_trainval": int(test_leaky.sum()),
                "frac_test_leaky": float(test_leaky[idx["test"]].mean()),
                "n_val_images_with_duplicate_in_train": int(val_leaky.sum()),
-               "threshold_bits": d["hamming_threshold"], "hash_bits": d["hash_size"] ** 2}
+               "threshold_bits": d["hamming_threshold"], "hash_bits": d["hash_size"] ** 2 - 1,
+               "hamming_histogram": (pairs["hamming"].value_counts().sort_index().to_dict() if len(pairs) else {})}
     save_json(summary, res / "duplicates_summary.json")
     print(summary)
 

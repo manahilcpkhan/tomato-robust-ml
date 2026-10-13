@@ -72,7 +72,7 @@ def main():
     if flag_file.exists():
         fl = pd.read_csv(flag_file).set_index("path")["leaky"]
         leak = fl.reindex(df["path"].values[idx["test"]]).fillna(False).values.astype(bool)
-        print(f"Leakage flags found: {int(leak.sum())}/{len(leak)} test images have a near-duplicate in train/val")
+        print(f"Leakage flags found: {int(leak.sum())}/{len(leak)} test images have a near-duplicate or same source photo in train/val")
 
     best, rows, per_class = {}, [], []
     for name in MODEL_NAMES:

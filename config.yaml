@@ -17,17 +17,27 @@ dataset:
   class_keywords:
     early_blight: [early]
     late_blight: [late]
-    septoria_leaf_spot: [septoria]
+    septoria_leaf_spot: [septoria, septora]     # the dataset folder is spelled "septora"
     leaf_mold: [mold, mould, leafmold]
     yellow_leaf_curl_virus: [yellow, curl, ylcv, tylcv]
     healthy: [healthy]
-  # Folder names that mark the official split. If none are found, a stratified fallback split is made.
+  # Folder names that mark the official split.
   split_names:
     train: [train, training]
     val: [val, valid, validation]
     test: [test, testing]
-  fallback_split: {train: 0.7, val: 0.2, test: 0.1}
-  image_extensions: [.jpg, .jpeg, .png]
+  # official : use the dataset's own train/val/test folders (only safe if the audit shows no group leakage)
+  # group    : ignore the folders and re-split by SOURCE PHOTO, so augmented copies of one photo never
+  #            land in different splits (use this if scripts/00_audit_dataset.py reports leakage)
+  split_strategy: group
+  group_split: {train: 0.7, val: 0.15, test: 0.15}
+  # Files derived from one source photo share the text before this pattern, e.g.
+  # 100_46341_aug_5aug62.jpg and 100_46341aug1.jpg -> source "100_46341". Set to "" to disable.
+  group_regex: "_?aug(?=_?\\d)"
+  # also merge visually near-identical images (resized/recompressed/flipped copies) into one group.
+  # Needed for the raw dataset (random file names). Reads every image once (~1-3 min).
+  group_by_hash: true
+  image_extensions: [.jpg, .jpeg, .png, .jfif, .bmp, .webp]
 
 preprocess:
   image_size: 256              # every image is resized to image_size x image_size once and cached
@@ -73,5 +83,8 @@ explain:
   topk: [10, 20]
 
 duplicates:
-  hash_size: 16                # dHash of hash_size*hash_size bits
-  hamming_threshold: 10        # bits (out of 256) below which two images count as near-duplicates
+  hash_size: 8                 # pHash: 8x8 low-frequency DCT block -> 63 bits
+  hamming_threshold: 10        # stage 1: bits (of 63) at or below which a pair becomes a candidate
+  min_correlation: 0.98        # stage 2: thumbnails must also correlate this strongly (removes false matches)
+                               # check results/duplicate_examples.png; if real copies are missed lower
+                               # min_correlation, if different leaves get merged raise it

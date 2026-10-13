@@ -6,7 +6,7 @@ Hand-crafted features (color / texture / shape) + Random Forest (SVM, LR as a br
 ## Do we need a GPU?
 **No.** Everything is classical ML on CPU (OpenCV / scikit-image / scikit-learn). The slow part is feature
 extraction (GLCM/LBP/segmentation per image), which is parallelised over CPU cores and cached. A laptop, a free
-Colab CPU runtime, or a Kaggle CPU notebook all work. A GPU would only matter for the optional CNN reference baseline.
+or a Colab CPU runtime all work. A GPU would only matter for the optional CNN reference baseline.
 
 ## Layout
 ```
@@ -21,15 +21,33 @@ src/                   all logic (importable, no notebook state)
   evaluate.py          metrics, bootstrap CI, confusion plots    [C]
   explain.py           permutation importance + stability stats  [C]
 scripts/               one runnable script per stage (below)
-notebooks/00_colab_kaggle_runner.ipynb   thin launcher for Colab/Kaggle
+notebooks/00_colab_runner.ipynb   thin launcher for Colab
 data/manifest.csv      path,label,split,class_id (commit this once)
 results/               small csv/json/png outputs (commit)
 work/                  image cache, features, models (git-ignored; large)
 ```
 
+## Dataset notes (Pakistan field tomato leaves, 6 classes)
+We use **`Dataset (raw)`**: original photos, no pre-made split. (`Augmented Dataset` was generated from it, so its test
+set contains augmented siblings of photos that may also be in train, and its brightness/flip/rotation changes would
+confound the perturbation study.) Folder names are matched by keyword; the dataset's own spelling quirks are handled.
+- **Our own split:** 70/15/15 per class, by **group**, with `config.yaml` `split_strategy: group`, seed 42. `data/manifest.csv`
+  is committed once so all three of us use the identical split.
+- **Groups:** file names are random, so images are grouped by visual similarity (`group_by_hash`): a 63-bit DCT
+  perceptual hash (flip-aware) proposes candidate pairs, and a 32x32 colour-thumbnail correlation (>= 0.98) confirms them.
+  Resized / recompressed / flipped / re-lit copies of one photo therefore never straddle train/test.
+  It does NOT catch a different photo of the same leaf from another angle: state this in the Limitations.
+- **Check after stage 01:** `results/grouping_summary.json` (pairs found, groups before/after, largest group).
+  A suspiciously large group means unrelated leaves were chained together: raise `duplicates.min_correlation`.
+  `results/duplicate_examples.png` (stage 02) shows example pairs to eyeball.
+- Cross-class near-duplicate pairs are reported as possible label noise (worth a sentence in Challenges).
+- CV in stage 7 is grouped as well, so copies never straddle folds.
+- If you ever want to use `Augmented Dataset`: set `split_strategy: official` and run stage 0 to quantify leakage first.
+
 ## Pipeline (run in order; each stage is resumable)
 | # | Script | Owner | Produces | Report section |
 |---|---|---|---|---|
+| 0 | `00_audit_dataset.py` | A | class/split counts, augmented share, **source-photo leakage** | Dataset, Challenges |
 | 1 | `01_prepare_data.py` | A | `manifest.csv`, image cache | Dataset |
 | 2 | `02_eda_duplicates.py` | A | class/size stats, brightness-by-class, segmentation check, **near-duplicate / leakage report**, perturbation gallery | Dataset, Challenges |
 | 3 | `03_extract_features.py` | B | cached feature matrices (105 features) | Methodology |
@@ -46,6 +64,7 @@ work/                  image cache, features, models (git-ignored; large)
 pip install -r requirements.txt
 # point to the dataset (or put it in data/raw/):
 export TOMATO_DATA_ROOT=/path/to/tomato_dataset      # Windows PowerShell: $env:TOMATO_DATA_ROOT="C:\..."
+python scripts/00_audit_dataset.py
 python scripts/01_prepare_data.py
 python scripts/02_eda_duplicates.py
 python scripts/03_extract_features.py --benchmark 100   # time it first
@@ -54,7 +73,7 @@ python scripts/04_baseline.py && python scripts/05_ablation.py
 python scripts/06_robustness.py && python scripts/07_importance_stability.py
 python scripts/08_error_analysis.py && python scripts/09_figures.py
 ```
-**Colab / Kaggle:** open `notebooks/00_colab_kaggle_runner.ipynb`, edit the CONFIG cell, run cells top to bottom.
+**Colab:** open `notebooks/00_colab_runner.ipynb`, edit the CONFIG cell, run cells top to bottom.
 
 Personal paths never go in `config.yaml`: use `config.local.yaml` (git-ignored) or the `TOMATO_*` env variables.
 

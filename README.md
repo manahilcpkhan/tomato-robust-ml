@@ -57,6 +57,8 @@ confound the perturbation study.) Folder names are matched by keyword; the datas
 | 7 | `07_importance_stability.py` | C | CV-fold and perturbation rank stability (Spearman, Kendall, top-k Jaccard) | Results |
 | 8 | `08_error_analysis.py` | C | most-confused pairs, misclassified examples, prediction shift under worst perturbation | Error analysis |
 | 9 | `09_figures.py` | C | report-ready figures + `robustness_drop.csv` | all |
+| 10 | `10_source_shortcut_check.py` | A | can image size / compression alone predict the class? (source shortcut) | Challenges, Limitations |
+| 11 | `11_repeated_splits.py` | B | 5 repeated grouped splits: mean ± std per model and feature set | Results |
 
 ## Run it
 **Local**
@@ -76,6 +78,18 @@ python scripts/08_error_analysis.py && python scripts/09_figures.py
 **Colab:** open `notebooks/00_colab_runner.ipynb`, edit the CONFIG cell, run cells top to bottom.
 
 Personal paths never go in `config.yaml`: use `config.local.yaml` (git-ignored) or the `TOMATO_*` env variables.
+
+## v2 re-run (changes after the first real run)
+Findings from the first run (see the Findings Log) led to these changes, all switchable in `config.yaml`:
+- `duplicates.drop_cross_class: true`: photos that appear under two different diseases are removed (with every copy of them);
+  the list is written to `results/dropped_cross_class.csv`.
+- `models.class_weight: balanced`: compensates the ~2.4x class imbalance (RF, SVM, LR). Set `null` for the unweighted baseline.
+- Stage 10: metadata-only classifier to quantify the source/resolution shortcut.
+- Stage 11: repeated grouped splits so comparisons carry error bars (single 121-image test set is too noisy).
+- `configs/seg_none.yaml`, `configs/seg_grabcut.yaml`: segmentation comparison (HSV vs GrabCut vs no mask) with separate work/results
+  folders (see the last section of the Colab notebook). GrabCut here is *initialised from the hue gate*, so on photos where the gate
+  already covers most of the frame it has little to refine; on dense-canopy photos "leaf vs background" is ill-defined, and the `none`
+  variant tests whether segmentation helps at all.
 
 ## Design decisions to cite in the report
 - **Protocol:** hyper-parameters tuned on *validation* (fit on train); final models refit on train+val; the test split is used only for reported numbers. Stage 5/6 reuse the parameters tuned on all features (a stated simplification).

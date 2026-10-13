@@ -1,0 +1,3 @@
+# Segmentation ablation: features from the WHOLE image (no leaf mask). Tells us whether segmentation helps at all.
+segmentation:
+  method: none

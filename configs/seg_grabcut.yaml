@@ -1,0 +1,3 @@
+# Segmentation comparison: HSV gate refined by GrabCut. Run with separate work/results dirs (see README, "Step 1 re-run").
+segmentation:
+  method: grabcut

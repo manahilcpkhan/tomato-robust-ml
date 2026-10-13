@@ -20,13 +20,15 @@ MODEL_NAMES = ("rf", "svm", "lr")
 
 def make_model(name: str, params: dict, cfg: dict):
     seed = cfg["seed"]
+    cw = cfg["models"].get("class_weight")
     if name == "rf":
         p = {"n_estimators": cfg["models"]["rf"]["n_estimators"], **params}
-        return RandomForestClassifier(random_state=seed, n_jobs=cfg["n_jobs"], **p)
+        return RandomForestClassifier(random_state=seed, n_jobs=cfg["n_jobs"], class_weight=cw, **p)
     if name == "svm":      # RBF-kernel SVM; scaling is essential for margin-based methods
-        return make_pipeline(StandardScaler(), SVC(kernel="rbf", random_state=seed, **params))
+        return make_pipeline(StandardScaler(), SVC(kernel="rbf", random_state=seed, class_weight=cw, **params))
     if name == "lr":       # L2-regularised multinomial logistic regression
-        return make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, random_state=seed, **params))
+        return make_pipeline(StandardScaler(),
+                             LogisticRegression(max_iter=3000, random_state=seed, class_weight=cw, **params))
     raise ValueError(name)
 
 

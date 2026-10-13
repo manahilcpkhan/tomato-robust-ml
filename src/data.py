@@ -142,19 +142,34 @@ def refine_groups(cfg, df: pd.DataFrame) -> pd.DataFrame:
         small = np.stack(list(ex.map(_load_small, paths)))
     pairs = find_near_duplicates(small, d["hash_size"], d["hamming_threshold"], min_corr=d["min_correlation"])
     labels = df["label"].values
-    cross = 0
+    cross, cross_idx = 0, set()
     for i, j in zip(pairs["i"].values, pairs["j"].values):
         if labels[i] == labels[j]:
             union(int(i), int(j))
         else:
             cross += 1
+            cross_idx.update((int(i), int(j)))
     roots = np.array([find(i) for i in range(n)])
     new_group = df["group"].values[roots]
     out = df.copy()
     before, after = out["group"].nunique(), len(set(new_group))
     out["group"] = new_group
+
+    n_dropped = 0
+    if d.get("drop_cross_class", False) and cross_idx:
+        # the same photo is filed under two diseases -> its label is unknowable. Drop every image that belongs to
+        # the same-class group of an affected image (so no copy of an ambiguous photo survives).
+        bad_groups = {new_group[i] for i in cross_idx}
+        drop = out["group"].isin(bad_groups).values
+        n_dropped = int(drop.sum())
+        rep = out[drop][["path", "label", "group"]].sort_values("group")
+        rep.to_csv(cfg["paths"]["results_dir"] / "dropped_cross_class.csv", index=False)
+        print(f"Dropping {n_dropped} images that are (copies of) a photo filed under two different diseases "
+              f"-> results/dropped_cross_class.csv")
+        out = out[~drop].reset_index(drop=True)
+        new_group = out["group"].values
     sizes = pd.Series(new_group).value_counts()
-    print(f"near-duplicate pairs: {len(pairs)} ({cross} across different classes = possible label noise). "
+    print(f"near-duplicate pairs: {len(pairs)} ({cross} across different classes = label noise). "
           f"groups {before} -> {after}; largest group: {int(sizes.max())} images")
     if sizes.max() > max(20, 0.02 * n):
         print(f"WARNING: one group has {int(sizes.max())} images ({sizes.max() / n:.1%} of the data). Near-duplicate "
@@ -162,6 +177,7 @@ def refine_groups(cfg, df: pd.DataFrame) -> pd.DataFrame:
               "duplicates.min_correlation in config.yaml, then rebuild.")
     save_json({"n_images": n, "n_pairs": int(len(pairs)), "n_cross_class_pairs": int(cross),
                "groups_before": int(before), "groups_after": int(after),
+               "n_images_dropped_cross_class": n_dropped,
                "largest_group": int(sizes.max()), "n_groups_with_copies": int((sizes > 1).sum())},
               cfg["paths"]["results_dir"] / "grouping_summary.json")
     return out
